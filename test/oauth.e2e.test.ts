@@ -119,6 +119,7 @@ beforeAll(async () => {
   child = spawn(TSX, [ENTRY], {
     env: {
       ...process.env,
+      HOST: "127.0.0.1",
       PORT: String(port),
       NETBIRD_ENABLE_OAUTH: "true",
       PUBLIC_BASE_URL: base,

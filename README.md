@@ -133,6 +133,7 @@ steered at an arbitrary host or driven with an unverified token.
 | `NETBIRD_MAX_RPM` | both | `110` | Client-side rate cap (under NetBird's 120/min) |
 | `NETBIRD_TIMEOUT_MS` | both | `30000` | Per-request timeout |
 | `LOG_LEVEL` | both | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `HOST` | cloud | `0.0.0.0` | Interface the HTTP server binds to; use `127.0.0.1` for a local-only daemon |
 | `PORT` | cloud | `3000` | HTTP listen port |
 | `PUBLIC_BASE_URL` | cloud | `http://localhost:PORT` | Public HTTPS origin advertised in OAuth metadata |
 | `NETBIRD_ENABLE_OAUTH` | cloud | `true` | Enable the OAuth 2.1 authorization server |

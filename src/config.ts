@@ -20,6 +20,8 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 
 /** HTTP (cloud) entrypoint settings — unused by the stdio entrypoint. */
 export interface HttpConfig {
+  /** Host/interface the Streamable HTTP server binds to. */
+  host: string;
   /** Port the Streamable HTTP server listens on. */
   port: number;
   /** Header carrying a direct NetBird PAT (fallback auth path). */
@@ -160,6 +162,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     logLevel,
     allowedApiHosts,
     http: {
+      host: env.HOST?.trim() || "0.0.0.0",
       port,
       tokenHeader: env.NETBIRD_TOKEN_HEADER ?? DEFAULT_TOKEN_HEADER,
       urlHeader: env.NETBIRD_URL_HEADER ?? DEFAULT_URL_HEADER,

@@ -36,6 +36,7 @@ const baseConfig: ServerConfig = {
   logLevel: "error",
   allowedApiHosts: ["api.netbird.io"],
   http: {
+    host: "127.0.0.1",
     port: 3000,
     tokenHeader: "x-netbird-token",
     urlHeader: "x-netbird-api-url",

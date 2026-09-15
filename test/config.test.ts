@@ -49,6 +49,7 @@ describe("loadServerConfig — http sub-object defaults", () => {
   it("resolves documented defaults when nothing is set", () => {
     const config = loadServerConfig({} as NodeJS.ProcessEnv);
     expect(config.http).toEqual({
+      host: "0.0.0.0",
       port: 3000,
       tokenHeader: "x-netbird-token",
       urlHeader: "x-netbird-api-url",
@@ -70,6 +71,7 @@ describe("loadServerConfig — http sub-object defaults", () => {
 describe("loadServerConfig — http sub-object explicit values", () => {
   it("honors every explicit http value", () => {
     const config = loadServerConfig({
+      HOST: "127.0.0.1",
       PORT: "4000",
       NETBIRD_TOKEN_HEADER: "x-custom-token",
       NETBIRD_URL_HEADER: "x-custom-url",
@@ -78,6 +80,7 @@ describe("loadServerConfig — http sub-object explicit values", () => {
       NETBIRD_VERIFY_PAT_ON_LOGIN: "false",
     } as NodeJS.ProcessEnv);
     expect(config.http).toEqual({
+      host: "127.0.0.1",
       port: 4000,
       tokenHeader: "x-custom-token",
       urlHeader: "x-custom-url",
@@ -92,6 +95,13 @@ describe("loadServerConfig — http sub-object explicit values", () => {
   it("parses PORT as a number", () => {
     const config = loadServerConfig({ PORT: "9090" } as NodeJS.ProcessEnv);
     expect(config.http.port).toBe(9090);
+  });
+
+  it("trims HOST and falls back to all interfaces when blank", () => {
+    expect(loadServerConfig({ HOST: " 127.0.0.1 " } as NodeJS.ProcessEnv).http.host).toBe(
+      "127.0.0.1",
+    );
+    expect(loadServerConfig({ HOST: "   " } as NodeJS.ProcessEnv).http.host).toBe("0.0.0.0");
   });
 
   it("parses NETBIRD_TRUST_PROXY: unset -> false, integer -> hop count, preset -> passthrough", () => {

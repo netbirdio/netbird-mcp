@@ -27,7 +27,7 @@ import { loginRateLimiter } from "../oauth/loginRateLimit.js";
  */
 const config = loadConfigOrExit();
 const logger = createLogger(config.logLevel);
-const { port, tokenHeader, urlHeader, oauthEnabled, directPatEnabled, publicBaseUrl, verifyPatOnLogin, trustProxy } =
+const { host, port, tokenHeader, urlHeader, oauthEnabled, directPatEnabled, publicBaseUrl, verifyPatOnLogin, trustProxy } =
   config.http;
 
 const provider = new NetBirdOAuthProvider({
@@ -158,8 +158,9 @@ const methodNotAllowed = (_req: express.Request, res: express.Response) => {
 app.get("/mcp", methodNotAllowed);
 app.delete("/mcp", methodNotAllowed);
 
-app.listen(port, () => {
+app.listen(port, host, () => {
   logger.info("netbird mcp server ready (http)", {
+    host,
     port,
     endpoint: "/mcp",
     publicBaseUrl,
