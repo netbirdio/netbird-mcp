@@ -9,7 +9,7 @@ export interface NetBirdClientOptions {
   timeoutMs: number;
   /** Injectable for tests. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
-  /** Max retries on 429 / 5xx / network errors. */
+  /** Max retries on 429 / 5xx / network errors (POST: 429 only). */
   maxRetries?: number;
 }
 
@@ -62,7 +62,7 @@ export type TokenVerification = "ok" | "invalid" | "unknown";
 /**
  * Thin REST client for the NetBird public API. Handles auth, timeouts, a
  * client-side rate limit, and exponential backoff on 429/5xx (honoring
- * Retry-After). Transport-agnostic — one instance per AuthContext.
+ * Retry-After; POST only on 429). Transport-agnostic — one instance per AuthContext.
  */
 export class NetBirdClient {
   private readonly fetchImpl: typeof fetch;
@@ -187,9 +187,19 @@ export class NetBirdClient {
     path: string,
   ): Promise<RetryDecision<T>> {
     const canRetry = attempt < this.maxRetries;
+    // POST is not idempotent: after a lost reply, a timeout or a 5xx the server
+    // may already have created the object, and sending it again creates a second
+    // one. So a POST is retried only on 429 (rejected before processing). GET,
+    // PUT (full replacement) and DELETE leave the same state when repeated.
+    const idempotent = method !== "POST";
+    // When a POST is not retried, say so in the error, so a caller (or an agent)
+    // doesn't treat it as a definite failure and simply send it again.
+    const uncertain = idempotent
+      ? ""
+      : " (the request may have been processed; check before retrying)";
 
     if (outcome.kind === "error") {
-      if (canRetry) {
+      if (canRetry && idempotent) {
         await this.backoff(backoffMs(attempt), "netbird request failed, retrying", {
           method,
           path,
@@ -197,12 +207,12 @@ export class NetBirdClient {
         });
         return { action: "retry" };
       }
-      const msg = `Network error calling NetBird ${method} ${path}: ${(outcome.error as Error).message}`;
+      const msg = `Network error calling NetBird ${method} ${path}: ${(outcome.error as Error).message}${uncertain}`;
       return { action: "throw", error: new NetBirdApiError(msg, 0) };
     }
 
     const { res } = outcome;
-    if ((res.status === 429 || res.status >= 500) && canRetry) {
+    if ((res.status === 429 || (res.status >= 500 && idempotent)) && canRetry) {
       const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
       // Clamp the honored delay: never trust an upstream Retry-After beyond the cap.
       const delay = Math.min(retryAfter ?? backoffMs(attempt), MAX_BACKOFF_MS);
@@ -215,11 +225,28 @@ export class NetBirdClient {
       return { action: "retry" };
     }
 
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      // The headers arrived but the body was cut off. Idempotent methods retry like
+      // any other transport error; a POST may still have been processed, so it
+      // keeps the same warning instead.
+      if (canRetry && idempotent) {
+        await this.backoff(backoffMs(attempt), "netbird response cut off, retrying", {
+          method,
+          path,
+          attempt,
+        });
+        return { action: "retry" };
+      }
+      const msg = `Network error reading NetBird ${method} ${path} response: ${(err as Error).message}${uncertain}`;
+      return { action: "throw", error: new NetBirdApiError(msg, 0) };
+    }
     const parsed = text ? safeJson(text) : undefined;
     if (!res.ok) {
       const error = new NetBirdApiError(
-        `NetBird ${method} ${path} failed with ${res.status}`,
+        `NetBird ${method} ${path} failed with ${res.status}${res.status >= 500 ? uncertain : ""}`,
         res.status,
         parsed ?? text,
       );

@@ -206,3 +206,120 @@ describe("NetBirdClient#verifyToken", () => {
     expect(await client.verifyToken()).toBe("unknown");
   });
 });
+
+describe("NetBirdClient retries and non-idempotent POSTs", () => {
+  // A stand-in for the NetBird API: every POST /api/setup-keys creates a key
+  // before the reply goes out. The first reply then goes wrong in one of the
+  // ways a client can't tell apart from "not created": the connection drops,
+  // the client times out, or a proxy answers 503.
+  function setupKeyServer(firstReply: "drop" | "timeout" | "503") {
+    const created: string[] = [];
+    const fetchImpl = vi.fn(async (_url, init?: RequestInit) => {
+      const id = `key-${created.length + 1}`;
+      created.push(id);
+      if (created.length === 1) {
+        if (firstReply === "drop") throw new TypeError("fetch failed: socket hang up");
+        if (firstReply === "503") {
+          return new Response("upstream error", { status: 503, headers: { "retry-after": "0" } });
+        }
+        await new Promise((_, reject) =>
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          ),
+        );
+      }
+      return jsonResponse({ id });
+    }) as unknown as typeof fetch;
+    return { created, fetchImpl };
+  }
+
+  for (const firstReply of ["drop", "timeout", "503"] as const) {
+    it(`one POST creates one object when the reply is lost (${firstReply})`, async () => {
+      const { created, fetchImpl } = setupKeyServer(firstReply);
+      const client = new NetBirdClient({
+        auth: { token: "test-pat", baseUrl: "https://api.netbird.io" },
+        logger: silentLogger,
+        rateLimiter: new RateLimiter(1000),
+        timeoutMs: 50,
+        fetchImpl,
+      });
+
+      const call = client.post("/api/setup-keys", { name: "ci-runner" });
+      await expect(call).rejects.toBeInstanceOf(NetBirdApiError);
+      await expect(call).rejects.toThrow("may have been processed");
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(created).toEqual(["key-1"]);
+    });
+  }
+
+  it("keeps the POST warning when the reply body is cut off", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.error(new TypeError("terminated: other side closed"));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const call = makeClient(fetchImpl).post("/api/setup-keys", { name: "ci-runner" });
+    await expect(call).rejects.toBeInstanceOf(NetBirdApiError);
+    await expect(call).rejects.toThrow("may have been processed");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("retries a GET whose reply body is cut off", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        const body = new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError("terminated: other side closed"));
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return jsonResponse([{ id: "p1" }]);
+    }) as unknown as typeof fetch;
+
+    const peers = await makeClient(fetchImpl).get("/api/peers");
+    expect(peers).toEqual([{ id: "p1" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("still retries a POST on 429, which the server rejected before processing", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      if (calls === 1) return new Response("", { status: 429, headers: { "retry-after": "0" } });
+      return jsonResponse({ id: "key-1" });
+    }) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    expect(await client.post("/api/setup-keys", { name: "ci-runner" })).toEqual({ id: "key-1" });
+    expect(calls).toBe(2);
+  });
+
+  for (const method of ["get", "put", "delete"] as const) {
+    it(`still retries an idempotent ${method.toUpperCase()} on 503 and on a network error`, async () => {
+      let calls = 0;
+      const fetchImpl = vi.fn(async () => {
+        calls++;
+        if (calls === 1) throw new TypeError("fetch failed");
+        if (calls === 2) return new Response("", { status: 503, headers: { "retry-after": "0" } });
+        return jsonResponse({ ok: true });
+      }) as unknown as typeof fetch;
+
+      const client = makeClient(fetchImpl);
+      const result =
+        method === "get"
+          ? await client.get("/api/groups/g1")
+          : method === "put"
+            ? await client.put("/api/groups/g1", { name: "eng" })
+            : await client.delete("/api/groups/g1");
+      expect(result).toEqual({ ok: true });
+      expect(calls).toBe(3);
+    });
+  }
+});
